@@ -185,12 +185,16 @@ class Recommender:
         total_usage["input_tokens"] += rank_usage["input_tokens"]
         total_usage["output_tokens"] += rank_usage["output_tokens"]
 
-        # Build ranked episode list with reasons
-        ranking_map = {r["id"]: r for r in rankings}
+        # Build ranked episode list with reasons (1 episode per feed)
         ranked_episodes = []
+        seen_feeds: set[int] = set()
         for r in rankings:
             ep = next((e for e in all_episodes if e.id == r["id"]), None)
             if ep:
+                if ep.feed_id and ep.feed_id in seen_feeds:
+                    continue
+                if ep.feed_id:
+                    seen_feeds.add(ep.feed_id)
                 ranked_episodes.append({
                     **ep.model_dump(),
                     "match_score": r["score"],
