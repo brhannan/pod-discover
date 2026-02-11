@@ -99,13 +99,17 @@ class Recommender:
             lines.append(line)
         return "\n".join(lines)
 
-    def _call_claude(self, prompt: str) -> str:
+    def _call_claude(self, prompt: str) -> tuple[str, dict]:
         response = self.client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=1024,
             messages=[{"role": "user", "content": prompt}],
         )
-        return response.content[0].text
+        usage = {
+            "input_tokens": response.usage.input_tokens,
+            "output_tokens": response.usage.output_tokens,
+        }
+        return response.content[0].text, usage
 
     def _parse_json(self, text: str):
         """Extract JSON from Claude's response, handling markdown fences."""
@@ -125,8 +129,12 @@ class Recommender:
         search_prompt = SEARCH_PROMPT.format(
             profile=profile, favorites=favorites, history=history, user_request=request_text
         )
-        queries_raw = self._call_claude(search_prompt)
+        queries_raw, search_usage = self._call_claude(search_prompt)
         queries = self._parse_json(queries_raw)
+        total_usage = {
+            "input_tokens": search_usage["input_tokens"],
+            "output_tokens": search_usage["output_tokens"],
+        }
 
         # Step 2: Search for episodes using generated queries
         all_episodes: list[Episode] = []
@@ -139,7 +147,7 @@ class Recommender:
                     all_episodes.append(ep)
 
         if not all_episodes:
-            return {"episodes": [], "queries_used": queries}
+            return {"episodes": [], "queries_used": queries, "usage": total_usage}
 
         # Step 3: Rank and explain
         episodes_summary = json.dumps(
@@ -158,8 +166,10 @@ class Recommender:
         rank_prompt = RANK_PROMPT.format(
             profile=profile, favorites=favorites, history=history, episodes=episodes_summary
         )
-        rankings_raw = self._call_claude(rank_prompt)
+        rankings_raw, rank_usage = self._call_claude(rank_prompt)
         rankings = self._parse_json(rankings_raw)
+        total_usage["input_tokens"] += rank_usage["input_tokens"]
+        total_usage["output_tokens"] += rank_usage["output_tokens"]
 
         # Build ranked episode list with reasons
         ranking_map = {r["id"]: r for r in rankings}
@@ -176,4 +186,5 @@ class Recommender:
         return {
             "episodes": ranked_episodes,
             "queries_used": queries,
+            "usage": total_usage,
         }
