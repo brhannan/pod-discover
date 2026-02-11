@@ -1,103 +1,141 @@
 # Pod-Discover
 
-Episode-level podcast discovery MCP server that provides Claude with tools to search podcast episodes, manage a taste profile, and log feedback.
+Episode-level podcast discovery with AI-powered recommendations. Includes a web app for browsing and curating, plus an MCP server for conversational discovery with Claude.
 
 ## Features
 
 - **Search & Discovery**: Search episodes by keyword, person, or discover random episodes
-- **Taste Profile**: Track preferences (depth, format, topics, duration) that Claude can reference
-- **Consumption Log**: Rate and annotate episodes to build your listening history
-- **Rich Metadata**: Access episode descriptions, duration, images, and transcript URLs
+- **AI Recommendations**: Claude analyzes your taste profile, favorite podcasts, and rating history to find episodes you'll love — with explanations for each match
+- **Favorite Podcasts**: Heart podcasts you love; the recommender uses them as signals
+- **Taste Profile**: Track preferences (depth, format, topics, duration)
+- **Consumption Log**: Rate episodes (1-5 stars) to build your listening history
+- **Two Interfaces**: Web app for browsing/curating, MCP server for conversational discovery in Claude Desktop
 
-## Getting Podcast Index API Credentials
+## Architecture
 
-1. Sign up at [Podcast Index](https://api.podcastindex.org/)
-   - **Note**: Currently requires a non-free email domain (no Gmail, Outlook, etc.)
-   - Consider using a custom domain email or work email
-2. After signup, get your API Key and Secret from the dashboard
+```
+┌─────────────────┐     ┌──────────────┐
+│   Web Frontend  │     │ Claude       │
+│   (React/Vite)  │     │ Desktop      │
+└────────┬────────┘     └──────┬───────┘
+         │                     │
+    ┌────▼─────┐        ┌──────▼──────┐
+    │ FastAPI  │        │ MCP Server  │
+    │ Backend  │        │ (stdio)     │
+    └────┬─────┘        └──────┬──────┘
+         │                     │
+         └──────────┬──────────┘
+                    │
+         ┌──────────┼──────────┐
+         │          │          │
+    Podcast    Claude API   SQLite
+    Index API  (Haiku)     (shared DB)
+```
+
+## Prerequisites
+
+- Python 3.10+
+- Node.js 18+
+- [uv](https://docs.astral.sh/uv/) (Python package manager)
+- [Podcast Index API credentials](https://api.podcastindex.org/)
+- [Anthropic API key](https://console.anthropic.com/) (for AI recommendations)
 
 ## Setup
 
-1. Install dependencies:
+### 1. Install dependencies
+
 ```bash
 cd pod-discover
 uv sync
+cd web && npm install
 ```
 
-2. Configure Claude Desktop:
+### 2. Set environment variables
 
-The configuration has been created at `~/Library/Application Support/Claude/claude_desktop_config.json`.
+```bash
+export PODCAST_INDEX_KEY="your_key"
+export PODCAST_INDEX_SECRET="your_secret"
+export ANTHROPIC_API_KEY="your_key"       # for AI recommendations
+```
 
-Edit this file and replace the placeholders with your actual credentials:
+### 3. Run the web app
+
+Start both the backend and frontend:
+
+```bash
+# Terminal 1: Backend API
+uv run uvicorn pod_discover.api:app --host 127.0.0.1 --port 8000
+
+# Terminal 2: Frontend
+cd web && npm run dev
+```
+
+Open http://localhost:5173
+
+### 4. (Optional) Configure Claude Desktop MCP
+
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+
 ```json
 {
   "mcpServers": {
     "pod-discover": {
       "command": "uv",
-      "args": ["run", "--directory", "/Users/bhannan/code/pod-discover", "src/pod_discover/server.py"],
+      "args": ["run", "--directory", "/path/to/pod-discover", "src/pod_discover/server.py"],
       "env": {
-        "PODCAST_INDEX_KEY": "your_actual_key_here",
-        "PODCAST_INDEX_SECRET": "your_actual_secret_here"
+        "PODCAST_INDEX_KEY": "your_key",
+        "PODCAST_INDEX_SECRET": "your_secret"
       }
     }
   }
 }
 ```
 
-3. Restart Claude Desktop to load the MCP server
+## Web App
 
-## Testing
+### Discover Tab
+- **Search**: Find episodes by keyword
+- **Surprise Me**: Random episode discovery
+- **Recommend for Me**: AI-powered recommendations based on your profile, favorites, and history
+- **Heart button**: Favorite a podcast to improve future recommendations
+- **Star ratings**: Rate episodes 1-5 stars
 
-Run the test suite:
-```bash
-uv run pytest
-```
+### History Tab
+- View all rated episodes with timestamps
 
-Test the MCP server with MCP Inspector:
-```bash
-uv run mcp dev src/pod_discover/server.py
-```
+### Profile Tab
+- Set preferred depth (casual / moderate / deep-dive)
+- Choose format preferences (narrative, interview, roundtable, solo)
+- Set duration range
+- Manage topic interests with weighted tags
+- View and manage favorite podcasts
 
-## Available Tools
+## MCP Server Tools
 
 ### Search & Discovery
 - `search_episodes` - Search by keyword/topic
-- `get_episode` - Get details for a specific episode ID
-- `get_podcast_episodes` - List recent episodes from a podcast
+- `get_episode` - Get details for a specific episode
+- `get_podcast_episodes` - List episodes from a podcast
 - `search_by_person` - Find episodes featuring a specific person
-- `discover_random` - Get random episodes for serendipitous discovery
+- `discover_random` - Random episodes for serendipitous discovery
 
 ### Taste Profile
-- `get_taste_profile` - View your current preferences
-- `update_taste_profile` - Update preferences (depth, format, topics, duration)
+- `get_taste_profile` / `update_taste_profile` - Manage preferences
 - `log_feedback` - Rate an episode (1-5) with notes
-- `get_history` - View your listening history
+- `get_history` - View listening history
 
-## Example Usage with Claude
+## Testing
 
-Once configured, you can have conversations like:
-
-```
-You: "Search for episodes about the history of cryptography"
-Claude: [Uses search_episodes tool]
-
-You: "I really liked that episode about Enigma, rate it 5 stars"
-Claude: [Uses log_feedback tool]
-
-You: "What's my taste profile?"
-Claude: [Uses get_taste_profile tool]
-
-You: "Based on what I like, find me something new about WWII history"
-Claude: [Uses search_episodes and cross-references with your profile]
+```bash
+uv run pytest -v
 ```
 
-## Database
+## Data Storage
 
-Profile and consumption data is stored in `~/.pod-discover/pod_discover.db`
+All data is stored locally in `~/.pod-discover/pod_discover.db` (SQLite). This database is shared between the web app and MCP server, so your ratings, favorites, and profile stay in sync across both interfaces.
 
-## Future Enhancements (v1)
+## Future Enhancements
 
-- Book search integration (Google Books API)
-- Movie search integration (TMDB API)
+- Book/movie cross-medium recommendations
 - Queue/library management
 - Transcript fetching and semantic search

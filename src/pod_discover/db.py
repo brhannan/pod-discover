@@ -44,6 +44,15 @@ class Database:
                 )
             """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS favorite_feeds (
+                    feed_id INTEGER PRIMARY KEY,
+                    feed_title TEXT NOT NULL,
+                    added_at TEXT DEFAULT (datetime('now'))
+                )
+            """
+            )
             conn.commit()
 
             # Ensure taste_profile has a default row
@@ -110,5 +119,49 @@ class Database:
             )
             rows = cursor.fetchall()
             return [ConsumptionEntry(**dict(row)) for row in rows]
+        finally:
+            conn.close()
+
+    def add_favorite_feed(self, feed_id: int, feed_title: str):
+        """Add a podcast to favorites."""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO favorite_feeds (feed_id, feed_title) VALUES (?, ?)",
+                (feed_id, feed_title),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def remove_favorite_feed(self, feed_id: int):
+        """Remove a podcast from favorites."""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute("DELETE FROM favorite_feeds WHERE feed_id = ?", (feed_id,))
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_favorite_feeds(self) -> list[dict]:
+        """Get all favorite podcasts."""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            cursor = conn.execute(
+                "SELECT feed_id, feed_title, added_at FROM favorite_feeds ORDER BY added_at DESC"
+            )
+            return [dict(row) for row in cursor.fetchall()]
+        finally:
+            conn.close()
+
+    def is_favorite_feed(self, feed_id: int) -> bool:
+        """Check if a feed is favorited."""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.execute(
+                "SELECT 1 FROM favorite_feeds WHERE feed_id = ?", (feed_id,)
+            )
+            return cursor.fetchone() is not None
         finally:
             conn.close()
