@@ -1,6 +1,11 @@
 """Pod-Discover REST API: FastAPI wrapper around existing logic."""
 
 from contextlib import asynccontextmanager
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware

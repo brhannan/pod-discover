@@ -123,6 +123,7 @@ function DiscoverView() {
   const [recRequest, setRecRequest] = useState("");
   const [showRecInput, setShowRecInput] = useState(false);
   const [favoriteFeeds, setFavoriteFeeds] = useState(new Set());
+  const [usage, setUsage] = useState(null);
 
   // Auto-load recommendations and favorites on mount
   useEffect(() => {
@@ -134,6 +135,7 @@ function DiscoverView() {
     api.getRecommendations("")
       .then((data) => {
         setRecommendations((data.episodes || []).slice(0, 6));
+        if (data.usage) setUsage(data.usage);
         setRecError(null);
       })
       .catch((e) => {
@@ -150,6 +152,7 @@ function DiscoverView() {
     try {
       const data = await api.getRecommendations("");
       setRecommendations((data.episodes || []).slice(0, 6));
+      if (data.usage) setUsage(data.usage);
     } catch (e) {
       setRecError(e.message);
     } finally {
@@ -295,6 +298,15 @@ function DiscoverView() {
                 favoriteFeeds={favoriteFeeds}
               />
             ))}
+          </div>
+        )}
+
+        {usage && !recLoading && (
+          <div className="flex items-center gap-3 mt-3 text-xs text-zinc-600">
+            <span>Tokens: {(usage.input_tokens + usage.output_tokens).toLocaleString()} ({usage.input_tokens.toLocaleString()} in / {usage.output_tokens.toLocaleString()} out)</span>
+            <span>·</span>
+            <span>Cost: ${((usage.input_tokens / 1_000_000) * 1 + (usage.output_tokens / 1_000_000) * 5).toFixed(4)}</span>
+            <span className="text-zinc-700">Haiku 4.5</span>
           </div>
         )}
       </section>
@@ -466,6 +478,9 @@ function ProfileView() {
   const [newTopic, setNewTopic] = useState("");
   const [newWeight, setNewWeight] = useState(0.5);
   const [favorites, setFavorites] = useState([]);
+  const [favSearch, setFavSearch] = useState("");
+  const [favResults, setFavResults] = useState([]);
+  const [favSearching, setFavSearching] = useState(false);
 
   useEffect(() => {
     api.getProfile().then((data) => {
@@ -478,6 +493,34 @@ function ProfileView() {
   async function handleRemoveFavorite(feedId) {
     await api.removeFavorite(feedId);
     setFavorites(favorites.filter((f) => f.feed_id !== feedId));
+  }
+
+  async function handleFavSearch(e) {
+    if (e) e.preventDefault();
+    if (!favSearch.trim()) return;
+    setFavSearching(true);
+    try {
+      const data = await api.searchEpisodes(favSearch, 30);
+      const seen = new Set(favorites.map((f) => f.feed_id));
+      const feeds = [];
+      for (const ep of data.episodes || []) {
+        if (ep.feed_id && !seen.has(ep.feed_id)) {
+          feeds.push({ feed_id: ep.feed_id, feed_title: ep.feed_title });
+          seen.add(ep.feed_id);
+        }
+      }
+      setFavResults(feeds);
+    } catch (e) {
+      console.error("Favorite search failed:", e);
+    } finally {
+      setFavSearching(false);
+    }
+  }
+
+  async function handleAddFavorite(feedId, feedTitle) {
+    await api.addFavorite(feedId, feedTitle);
+    setFavorites([...favorites, { feed_id: feedId, feed_title: feedTitle }]);
+    setFavResults(favResults.filter((f) => f.feed_id !== feedId));
   }
 
   async function handleSave() {
@@ -571,8 +614,8 @@ function ProfileView() {
 
           <div>
             <p className="text-xs text-zinc-500 uppercase tracking-wide mb-2">Favorite Podcasts</p>
-            {favorites.length > 0 ? (
-              <div className="grid gap-2">
+            {favorites.length > 0 && (
+              <div className="grid gap-2 mb-3">
                 {favorites.map((fav) => (
                   <div
                     key={fav.feed_id}
@@ -588,10 +631,40 @@ function ProfileView() {
                   </div>
                 ))}
               </div>
-            ) : (
-              <p className="text-sm text-zinc-500">
-                No favorites yet — click the heart next to a podcast name in Discover
-              </p>
+            )}
+            <form onSubmit={handleFavSearch} className="flex gap-2">
+              <input
+                type="text"
+                value={favSearch}
+                onChange={(e) => setFavSearch(e.target.value)}
+                placeholder="Search podcasts to add..."
+                className="flex-1 bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-indigo-500 transition-colors"
+              />
+              <button
+                type="submit"
+                disabled={favSearching}
+                className="px-4 py-2 text-sm bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+              >
+                {favSearching ? "Searching..." : "Search"}
+              </button>
+            </form>
+            {favResults.length > 0 && (
+              <div className="grid gap-2 mt-3">
+                {favResults.map((feed) => (
+                  <div
+                    key={feed.feed_id}
+                    className="flex items-center justify-between p-2 bg-zinc-900 border border-zinc-800 rounded-lg"
+                  >
+                    <span className="text-sm text-zinc-300">{feed.feed_title}</span>
+                    <button
+                      onClick={() => handleAddFavorite(feed.feed_id, feed.feed_title)}
+                      className="text-xs text-indigo-400 hover:text-indigo-300 cursor-pointer px-2"
+                    >
+                      + Add
+                    </button>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         </div>
