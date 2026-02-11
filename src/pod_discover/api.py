@@ -146,6 +146,38 @@ async def remove_favorite(feed_id: int):
     return {"status": "success"}
 
 
+# --- My List ---
+
+
+class MyListRequest(BaseModel):
+    episode_id: int
+    episode_title: str
+    feed_id: int | None = None
+    feed_title: str | None = None
+    image: str | None = None
+    url: str | None = None
+
+
+@app.get("/api/my-list")
+async def get_my_list():
+    entries = db.get_my_list()
+    return {"entries": [e.model_dump() for e in entries]}
+
+
+@app.post("/api/my-list")
+async def add_to_my_list(req: MyListRequest):
+    db.add_to_my_list(
+        req.episode_id, req.episode_title, req.feed_id, req.feed_title, req.image, req.url
+    )
+    return {"status": "success"}
+
+
+@app.delete("/api/my-list/{episode_id}")
+async def remove_from_my_list(episode_id: int):
+    db.remove_from_my_list(episode_id)
+    return {"status": "success"}
+
+
 # --- AI Recommendations ---
 
 

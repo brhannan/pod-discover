@@ -33,3 +33,14 @@ class ConsumptionEntry(BaseModel):
     rating: int = Field(ge=1, le=5)
     notes: str | None = None
     timestamp: str = ""
+
+
+class QueueEntry(BaseModel):
+    id: int = 0
+    episode_id: int
+    episode_title: str
+    feed_id: int | None = None
+    feed_title: str | None = None
+    image: str | None = None
+    url: str | None = None
+    added_at: str = ""

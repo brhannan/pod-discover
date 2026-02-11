@@ -74,3 +74,25 @@ export async function getRecommendations(userRequest = "") {
     body: JSON.stringify({ request: userRequest }),
   });
 }
+
+export async function getMyList() {
+  return request("/my-list");
+}
+
+export async function addToMyList(episodeId, title, feedId, feedTitle, image, url) {
+  return request("/my-list", {
+    method: "POST",
+    body: JSON.stringify({
+      episode_id: episodeId,
+      episode_title: title,
+      feed_id: feedId,
+      feed_title: feedTitle,
+      image: image,
+      url: url,
+    }),
+  });
+}
+
+export async function removeFromMyList(episodeId) {
+  return request(`/my-list/${episodeId}`, { method: "DELETE" });
+}

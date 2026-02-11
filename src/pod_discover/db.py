@@ -4,7 +4,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-from .models import ConsumptionEntry, TasteProfile
+from .models import ConsumptionEntry, QueueEntry, TasteProfile
 
 
 class Database:
@@ -49,6 +49,32 @@ class Database:
                 CREATE TABLE IF NOT EXISTS favorite_feeds (
                     feed_id INTEGER PRIMARY KEY,
                     feed_title TEXT NOT NULL,
+                    added_at TEXT DEFAULT (datetime('now'))
+                )
+            """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS recommendations_cache (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    profile_hash TEXT NOT NULL,
+                    user_request TEXT DEFAULT '',
+                    response_json TEXT NOT NULL,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    UNIQUE(profile_hash, user_request)
+                )
+            """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS my_list (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    episode_id INTEGER NOT NULL UNIQUE,
+                    episode_title TEXT NOT NULL,
+                    feed_id INTEGER,
+                    feed_title TEXT,
+                    image TEXT,
+                    url TEXT,
                     added_at TEXT DEFAULT (datetime('now'))
                 )
             """
@@ -163,5 +189,93 @@ class Database:
                 "SELECT 1 FROM favorite_feeds WHERE feed_id = ?", (feed_id,)
             )
             return cursor.fetchone() is not None
+        finally:
+            conn.close()
+
+    # --- Recommendations Cache ---
+
+    def get_cached_recommendations(
+        self, profile_hash: str, user_request: str, max_age_minutes: int = 60
+    ) -> str | None:
+        """Return cached JSON or None if expired/missing."""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.execute(
+                """
+                SELECT response_json FROM recommendations_cache
+                WHERE profile_hash = ? AND user_request = ?
+                  AND datetime(created_at, '+' || ? || ' minutes') > datetime('now')
+                """,
+                (profile_hash, user_request, max_age_minutes),
+            )
+            row = cursor.fetchone()
+            return row[0] if row else None
+        finally:
+            conn.close()
+
+    def set_cached_recommendations(
+        self, profile_hash: str, user_request: str, response_json: str
+    ):
+        """Upsert a cache entry."""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute(
+                """
+                INSERT INTO recommendations_cache (profile_hash, user_request, response_json)
+                VALUES (?, ?, ?)
+                ON CONFLICT(profile_hash, user_request)
+                DO UPDATE SET response_json = excluded.response_json,
+                             created_at = datetime('now')
+                """,
+                (profile_hash, user_request, response_json),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    # --- My List ---
+
+    def get_my_list(self) -> list[QueueEntry]:
+        """Return all queue entries ordered by added_at DESC."""
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            cursor = conn.execute(
+                "SELECT * FROM my_list ORDER BY added_at DESC"
+            )
+            return [QueueEntry(**dict(row)) for row in cursor.fetchall()]
+        finally:
+            conn.close()
+
+    def add_to_my_list(
+        self,
+        episode_id: int,
+        episode_title: str,
+        feed_id: int | None,
+        feed_title: str | None,
+        image: str | None,
+        url: str | None,
+    ):
+        """Add an episode to My List (ignore if already present)."""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO my_list
+                    (episode_id, episode_title, feed_id, feed_title, image, url)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (episode_id, episode_title, feed_id, feed_title, image, url),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def remove_from_my_list(self, episode_id: int):
+        """Remove an episode from My List."""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute("DELETE FROM my_list WHERE episode_id = ?", (episode_id,))
+            conn.commit()
         finally:
             conn.close()
