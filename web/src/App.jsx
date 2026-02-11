@@ -5,12 +5,14 @@ import * as api from "./api";
 
 const TABS = [
   { id: "discover", label: "Discover" },
+  { id: "my-list", label: "My List" },
   { id: "history", label: "History" },
   { id: "profile", label: "Profile" },
 ];
 
-function RecommendationCard({ episode, onViewFeed, favoriteFeeds }) {
+function RecommendationCard({ episode, onViewFeed, favoriteFeeds, onAddToList, myListIds }) {
   const [isFav, setIsFav] = useState(favoriteFeeds.has(episode.feed_id));
+  const [inList, setInList] = useState(myListIds.has(episode.id));
   const description = (() => {
     const div = document.createElement("div");
     div.innerHTML = episode.description || "";
@@ -84,6 +86,25 @@ function RecommendationCard({ episode, onViewFeed, favoriteFeeds }) {
                   {isFav ? "♥" : "♡"}
                 </button>
               )}
+              <button
+                onClick={async () => {
+                  if (inList) return;
+                  try {
+                    await onAddToList(episode);
+                    setInList(true);
+                  } catch (e) {
+                    console.error("Failed to add to list:", e);
+                  }
+                }}
+                title={inList ? "In your list" : "Add to My List"}
+                className={`cursor-pointer transition-colors text-xs leading-none px-1.5 py-0.5 rounded ${
+                  inList
+                    ? "bg-emerald-900/40 text-emerald-400"
+                    : "bg-zinc-800 text-zinc-500 hover:text-indigo-300 hover:bg-zinc-700"
+                }`}
+              >
+                {inList ? "Listed" : "+ List"}
+              </button>
               {duration && (
                 <>
                   <span className="text-zinc-700">·</span>
@@ -124,11 +145,16 @@ function DiscoverView() {
   const [showRecInput, setShowRecInput] = useState(false);
   const [favoriteFeeds, setFavoriteFeeds] = useState(new Set());
   const [usage, setUsage] = useState(null);
+  const [cached, setCached] = useState(false);
+  const [myListIds, setMyListIds] = useState(new Set());
 
-  // Auto-load recommendations and favorites on mount
+  // Auto-load recommendations, favorites, and my list on mount
   useEffect(() => {
     api.getFavorites().then((data) => {
       setFavoriteFeeds(new Set((data.favorites || []).map((f) => f.feed_id)));
+    });
+    api.getMyList().then((data) => {
+      setMyListIds(new Set((data.entries || []).map((e) => e.episode_id)));
     });
 
     setRecLoading(true);
@@ -136,6 +162,7 @@ function DiscoverView() {
       .then((data) => {
         setRecommendations((data.episodes || []).slice(0, 6));
         if (data.usage) setUsage(data.usage);
+        setCached(!!data.cached);
         setRecError(null);
       })
       .catch((e) => {
@@ -153,11 +180,19 @@ function DiscoverView() {
       const data = await api.getRecommendations("");
       setRecommendations((data.episodes || []).slice(0, 6));
       if (data.usage) setUsage(data.usage);
+      setCached(!!data.cached);
     } catch (e) {
       setRecError(e.message);
     } finally {
       setRecLoading(false);
     }
+  }
+
+  async function handleAddToList(episode) {
+    await api.addToMyList(
+      episode.id, episode.title, episode.feed_id, episode.feed_title, episode.image, episode.url
+    );
+    setMyListIds((prev) => new Set([...prev, episode.id]));
   }
 
   async function handleSearch(query) {
@@ -296,6 +331,8 @@ function DiscoverView() {
                 episode={ep}
                 onViewFeed={handleViewFeed}
                 favoriteFeeds={favoriteFeeds}
+                onAddToList={handleAddToList}
+                myListIds={myListIds}
               />
             ))}
           </div>
@@ -303,6 +340,11 @@ function DiscoverView() {
 
         {usage && !recLoading && (
           <div className="flex items-center gap-3 mt-3 text-xs text-zinc-600">
+            {cached && (
+              <span className="px-2 py-0.5 bg-emerald-900/30 border border-emerald-800/40 rounded-full text-emerald-400">
+                cached
+              </span>
+            )}
             <span>Tokens: {(usage.input_tokens + usage.output_tokens).toLocaleString()} ({usage.input_tokens.toLocaleString()} in / {usage.output_tokens.toLocaleString()} out)</span>
             <span>·</span>
             <span>Cost: ${((usage.input_tokens / 1_000_000) * 1 + (usage.output_tokens / 1_000_000) * 5).toFixed(4)}</span>
@@ -412,11 +454,100 @@ function DiscoverView() {
                 episode={ep}
                 onViewFeed={handleViewFeed}
                 favoriteFeeds={favoriteFeeds}
+                myListIds={myListIds}
               />
             ))}
           </div>
         )}
       </section>
+    </div>
+  );
+}
+
+function MyListView() {
+  const [entries, setEntries] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    api.getMyList().then((data) => {
+      setEntries(data.entries || []);
+      setLoading(false);
+    });
+  }, []);
+
+  async function handleRemove(episodeId) {
+    try {
+      await api.removeFromMyList(episodeId);
+      setEntries((prev) => prev.filter((e) => e.episode_id !== episodeId));
+    } catch (e) {
+      console.error("Failed to remove from list:", e);
+    }
+  }
+
+  if (loading) return <p className="text-zinc-500">Loading your list...</p>;
+
+  if (entries.length === 0) {
+    return (
+      <div className="text-center py-20 text-zinc-500">
+        <p className="text-lg">Your list is empty</p>
+        <p className="text-sm mt-1">
+          Click "+ List" on episodes in Discover to save them here
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <h2 className="text-lg font-semibold text-zinc-200">My List</h2>
+      <div className="grid gap-3">
+        {entries.map((entry) => (
+          <div
+            key={entry.episode_id}
+            className="flex gap-3 p-4 bg-zinc-900 border border-zinc-800 rounded-xl hover:border-zinc-700 transition-colors"
+          >
+            {entry.image && (
+              <img
+                src={entry.image}
+                alt=""
+                className="w-14 h-14 rounded-lg object-cover flex-shrink-0"
+                onError={(e) => (e.target.style.display = "none")}
+              />
+            )}
+            <div className="flex-1 min-w-0">
+              <h3 className="text-sm font-semibold text-zinc-100 leading-snug line-clamp-2">
+                {entry.url ? (
+                  <a
+                    href={entry.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="hover:text-indigo-400 transition-colors"
+                  >
+                    {entry.episode_title}
+                  </a>
+                ) : (
+                  entry.episode_title
+                )}
+              </h3>
+              <div className="flex items-center gap-2 mt-1 text-xs text-zinc-500">
+                {entry.feed_title && <span>{entry.feed_title}</span>}
+                {entry.added_at && (
+                  <>
+                    <span className="text-zinc-700">·</span>
+                    <span>Added {entry.added_at.split("T")[0] || entry.added_at}</span>
+                  </>
+                )}
+              </div>
+            </div>
+            <button
+              onClick={() => handleRemove(entry.episode_id)}
+              className="flex-shrink-0 self-center px-3 py-1.5 text-xs bg-zinc-800 hover:bg-red-900/40 text-zinc-500 hover:text-red-400 rounded-lg transition-colors cursor-pointer"
+            >
+              Remove
+            </button>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -874,6 +1005,7 @@ export default function App() {
 
       <main className="max-w-3xl mx-auto px-4 py-6">
         {tab === "discover" && <DiscoverView />}
+        {tab === "my-list" && <MyListView />}
         {tab === "history" && <HistoryView />}
         {tab === "profile" && <ProfileView />}
       </main>

@@ -1,5 +1,6 @@
 """AI-powered recommendation engine using Claude."""
 
+import hashlib
 import json
 import os
 
@@ -119,10 +120,23 @@ class Recommender:
             text = text.rsplit("```", 1)[0]
         return json.loads(text.strip())
 
+    def _cache_key(self, profile: str, favorites: str, history: str, user_request: str) -> str:
+        """Create a hash of the inputs to use as a cache key."""
+        content = f"{profile}|{favorites}|{history}|{user_request}"
+        return hashlib.sha256(content.encode()).hexdigest()
+
     async def recommend(self, user_request: str = "") -> dict:
         profile = self._profile_summary()
         favorites = self._favorites_summary()
         history = self._history_summary()
+
+        # Check cache first
+        profile_hash = self._cache_key(profile, favorites, history, user_request)
+        cached = self.db.get_cached_recommendations(profile_hash, user_request)
+        if cached:
+            result = json.loads(cached)
+            result["cached"] = True
+            return result
 
         # Step 1: Generate search queries
         request_text = f"The user says: \"{user_request}\"" if user_request else "No specific request — suggest based on their profile and favorite podcasts."
@@ -147,7 +161,7 @@ class Recommender:
                     all_episodes.append(ep)
 
         if not all_episodes:
-            return {"episodes": [], "queries_used": queries, "usage": total_usage}
+            return {"episodes": [], "queries_used": queries, "usage": total_usage, "cached": False}
 
         # Step 3: Rank and explain
         episodes_summary = json.dumps(
@@ -183,8 +197,14 @@ class Recommender:
                     "match_reason": r["reason"],
                 })
 
-        return {
+        result = {
             "episodes": ranked_episodes,
             "queries_used": queries,
             "usage": total_usage,
+            "cached": False,
         }
+
+        # Store in cache
+        self.db.set_cached_recommendations(profile_hash, user_request, json.dumps(result))
+
+        return result

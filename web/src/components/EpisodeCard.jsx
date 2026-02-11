@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { logFeedback, addFavorite, removeFavorite } from "../api";
+import { logFeedback, addFavorite, removeFavorite, addToMyList } from "../api";
 
 function StarRating({ rating, onRate }) {
   return (
@@ -35,11 +35,12 @@ function stripHtml(html) {
   return div.textContent || "";
 }
 
-export default function EpisodeCard({ episode, onViewFeed, onRate, favoriteFeeds = new Set() }) {
+export default function EpisodeCard({ episode, onViewFeed, onRate, favoriteFeeds = new Set(), myListIds = new Set() }) {
   const [userRating, setUserRating] = useState(0);
   const [rated, setRated] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [isFav, setIsFav] = useState(favoriteFeeds.has(episode.feed_id));
+  const [inList, setInList] = useState(myListIds.has(episode.id));
 
   const description = stripHtml(episode.description || "");
   const duration = formatDuration(episode.duration_seconds);
@@ -116,6 +117,27 @@ export default function EpisodeCard({ episode, onViewFeed, onRate, favoriteFeeds
                 {isFav ? "♥" : "♡"}
               </button>
             )}
+            <button
+              onClick={async () => {
+                if (inList) return;
+                try {
+                  await addToMyList(
+                    episode.id, episode.title, episode.feed_id, episode.feed_title, episode.image, episode.url
+                  );
+                  setInList(true);
+                } catch (e) {
+                  console.error("Failed to add to list:", e);
+                }
+              }}
+              title={inList ? "In your list" : "Add to My List"}
+              className={`cursor-pointer transition-colors text-xs leading-none px-1.5 py-0.5 rounded ${
+                inList
+                  ? "bg-emerald-900/40 text-emerald-400"
+                  : "bg-zinc-800 text-zinc-500 hover:text-indigo-300 hover:bg-zinc-700"
+              }`}
+            >
+              {inList ? "Listed" : "+ List"}
+            </button>
             {duration && (
               <>
                 <span className="text-zinc-600">·</span>
