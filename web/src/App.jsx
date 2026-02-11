@@ -9,7 +9,111 @@ const TABS = [
   { id: "profile", label: "Profile" },
 ];
 
+function RecommendationCard({ episode, onViewFeed, favoriteFeeds }) {
+  const [isFav, setIsFav] = useState(favoriteFeeds.has(episode.feed_id));
+  const description = (() => {
+    const div = document.createElement("div");
+    div.innerHTML = episode.description || "";
+    return div.textContent || "";
+  })();
+
+  async function toggleFavorite() {
+    try {
+      if (isFav) {
+        await api.removeFavorite(episode.feed_id);
+        setIsFav(false);
+      } else {
+        await api.addFavorite(episode.feed_id, episode.feed_title);
+        setIsFav(true);
+      }
+    } catch (e) {
+      console.error("Failed to toggle favorite:", e);
+    }
+  }
+
+  const duration = episode.duration_seconds
+    ? episode.duration_seconds >= 3600
+      ? `${Math.floor(episode.duration_seconds / 3600)}h ${Math.floor((episode.duration_seconds % 3600) / 60)}m`
+      : `${Math.floor(episode.duration_seconds / 60)}m`
+    : null;
+
+  return (
+    <div className="group bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden hover:border-indigo-700/50 transition-all">
+      <div className="p-4">
+        <div className="flex gap-3">
+          {episode.image && (
+            <img
+              src={episode.image}
+              alt=""
+              className="w-16 h-16 rounded-lg object-cover flex-shrink-0"
+              onError={(e) => (e.target.style.display = "none")}
+            />
+          )}
+          <div className="flex-1 min-w-0">
+            <h3 className="text-sm font-semibold text-zinc-100 leading-snug line-clamp-2">
+              {episode.url ? (
+                <a
+                  href={episode.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="hover:text-indigo-400 transition-colors"
+                >
+                  {episode.title}
+                </a>
+              ) : (
+                episode.title
+              )}
+            </h3>
+            <div className="flex items-center gap-2 mt-1 text-xs text-zinc-500">
+              {episode.feed_title && (
+                <button
+                  onClick={() => onViewFeed && onViewFeed(episode.feed_id, episode.feed_title)}
+                  className="hover:text-indigo-400 cursor-pointer transition-colors truncate"
+                >
+                  {episode.feed_title}
+                </button>
+              )}
+              {episode.feed_id && (
+                <button
+                  onClick={toggleFavorite}
+                  title={isFav ? "Remove from favorites" : "Add podcast to favorites"}
+                  className={`cursor-pointer transition-colors text-base leading-none ${
+                    isFav ? "text-red-400" : "text-zinc-600 hover:text-red-300"
+                  }`}
+                >
+                  {isFav ? "♥" : "♡"}
+                </button>
+              )}
+              {duration && (
+                <>
+                  <span className="text-zinc-700">·</span>
+                  <span>{duration}</span>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {episode.match_reason && (
+          <div className="mt-3 flex items-start gap-2 px-3 py-2 bg-indigo-950/30 border border-indigo-900/30 rounded-lg">
+            <span className="text-indigo-400 flex-shrink-0 text-xs font-bold mt-px">
+              {episode.match_score}/10
+            </span>
+            <p className="text-xs text-indigo-300/90 leading-relaxed">{episode.match_reason}</p>
+          </div>
+        )}
+
+        <p className="mt-2 text-xs text-zinc-500 leading-relaxed line-clamp-2">{description}</p>
+      </div>
+    </div>
+  );
+}
+
 function DiscoverView() {
+  const [recommendations, setRecommendations] = useState([]);
+  const [recLoading, setRecLoading] = useState(true);
+  const [recError, setRecError] = useState(null);
+
   const [episodes, setEpisodes] = useState([]);
   const [loading, setLoading] = useState(false);
   const [searchMode, setSearchMode] = useState(null);
@@ -20,11 +124,38 @@ function DiscoverView() {
   const [showRecInput, setShowRecInput] = useState(false);
   const [favoriteFeeds, setFavoriteFeeds] = useState(new Set());
 
+  // Auto-load recommendations and favorites on mount
   useEffect(() => {
     api.getFavorites().then((data) => {
       setFavoriteFeeds(new Set((data.favorites || []).map((f) => f.feed_id)));
     });
+
+    setRecLoading(true);
+    api.getRecommendations("")
+      .then((data) => {
+        setRecommendations((data.episodes || []).slice(0, 6));
+        setRecError(null);
+      })
+      .catch((e) => {
+        setRecError(e.message);
+      })
+      .finally(() => {
+        setRecLoading(false);
+      });
   }, []);
+
+  async function refreshRecommendations() {
+    setRecLoading(true);
+    setRecError(null);
+    try {
+      const data = await api.getRecommendations("");
+      setRecommendations((data.episodes || []).slice(0, 6));
+    } catch (e) {
+      setRecError(e.message);
+    } finally {
+      setRecLoading(false);
+    }
+  }
 
   async function handleSearch(query) {
     setLoading(true);
@@ -95,102 +226,185 @@ function DiscoverView() {
     }
   }
 
-  return (
-    <div className="space-y-6">
-      <SearchBar onSearch={handleSearch} loading={loading} />
+  function clearSearch() {
+    setEpisodes([]);
+    setSearchMode(null);
+    setFeedInfo(null);
+    setQueriesUsed(null);
+    setError(null);
+  }
 
-      <div className="flex items-center gap-3 flex-wrap">
-        <button
-          onClick={handleRandom}
-          disabled={loading}
-          className="px-4 py-2 text-sm bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
-        >
-          Surprise Me
-        </button>
-        <button
-          onClick={() => showRecInput ? handleRecommend() : setShowRecInput(true)}
-          disabled={loading}
-          className="px-4 py-2 text-sm bg-indigo-700 hover:bg-indigo-600 text-white rounded-lg transition-colors cursor-pointer disabled:opacity-50"
-        >
-          {loading && searchMode === "recommend" ? "Finding recommendations..." : "Recommend for Me"}
-        </button>
-        {feedInfo && (
-          <div className="flex items-center gap-2 text-sm text-zinc-400">
-            <span>Browsing:</span>
-            <span className="text-indigo-400 font-medium">{feedInfo.title}</span>
+  return (
+    <div className="space-y-8">
+      {/* Hero Recommendations Section */}
+      <section>
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-xl font-bold text-zinc-100">Picked for You</h2>
+            <p className="text-sm text-zinc-500 mt-0.5">Based on your taste profile</p>
+          </div>
+          <button
+            onClick={refreshRecommendations}
+            disabled={recLoading}
+            className="px-3 py-1.5 text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-400 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+          >
+            {recLoading ? "Refreshing..." : "Refresh"}
+          </button>
+        </div>
+
+        {recLoading && (
+          <div className="py-12 text-center">
+            <div className="inline-flex items-center gap-2 text-sm text-indigo-400 animate-pulse">
+              <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              Analyzing your taste profile and finding episodes...
+            </div>
+          </div>
+        )}
+
+        {recError && !recLoading && (
+          <div className="p-4 bg-zinc-900 border border-zinc-800 rounded-xl text-center">
+            <p className="text-sm text-zinc-400">Could not load recommendations.</p>
+            <p className="text-xs text-zinc-600 mt-1">{recError}</p>
             <button
-              onClick={() => { setFeedInfo(null); setEpisodes([]); setSearchMode(null); }}
-              className="text-zinc-500 hover:text-zinc-300 cursor-pointer"
+              onClick={refreshRecommendations}
+              className="mt-3 px-4 py-1.5 text-xs bg-indigo-700 hover:bg-indigo-600 text-white rounded-lg transition-colors cursor-pointer"
             >
-              ✕
+              Try Again
             </button>
           </div>
         )}
-      </div>
 
-      {showRecInput && (
-        <form onSubmit={handleRecommend} className="flex gap-2">
-          <input
-            type="text"
-            value={recRequest}
-            onChange={(e) => setRecRequest(e.target.value)}
-            placeholder="Optional: tell it what you're in the mood for... (or leave blank for profile-based recs)"
-            autoFocus
-            className="flex-1 bg-zinc-900 border border-indigo-700/50 rounded-lg px-4 py-2.5 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-indigo-500 transition-colors"
-          />
+        {!recLoading && !recError && recommendations.length === 0 && (
+          <div className="p-6 bg-zinc-900 border border-zinc-800 rounded-xl text-center">
+            <p className="text-sm text-zinc-400">
+              Set up your taste profile to get personalized recommendations.
+            </p>
+          </div>
+        )}
+
+        {!recLoading && recommendations.length > 0 && (
+          <div className="grid gap-3">
+            {recommendations.map((ep) => (
+              <RecommendationCard
+                key={ep.id}
+                episode={ep}
+                onViewFeed={handleViewFeed}
+                favoriteFeeds={favoriteFeeds}
+              />
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* Divider */}
+      <div className="border-t border-zinc-800" />
+
+      {/* Explore Section */}
+      <section>
+        <h2 className="text-sm font-semibold text-zinc-400 uppercase tracking-wide mb-4">Explore</h2>
+
+        <SearchBar onSearch={handleSearch} loading={loading} />
+
+        <div className="flex items-center gap-3 flex-wrap mt-3">
           <button
-            type="submit"
+            onClick={handleRandom}
             disabled={loading}
-            className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+            className="px-4 py-2 text-sm bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
           >
-            Go
+            Surprise Me
           </button>
-        </form>
-      )}
-
-      {error && (
-        <div className="p-3 bg-red-900/30 border border-red-800 rounded-lg text-sm text-red-300">
-          {error}
+          <button
+            onClick={() => showRecInput ? handleRecommend() : setShowRecInput(true)}
+            disabled={loading}
+            className="px-4 py-2 text-sm bg-indigo-700 hover:bg-indigo-600 text-white rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+          >
+            {loading && searchMode === "recommend" ? "Finding..." : "Custom Recommendations"}
+          </button>
+          {feedInfo && (
+            <div className="flex items-center gap-2 text-sm text-zinc-400">
+              <span>Browsing:</span>
+              <span className="text-indigo-400 font-medium">{feedInfo.title}</span>
+              <button
+                onClick={clearSearch}
+                className="text-zinc-500 hover:text-zinc-300 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+          {searchMode && !feedInfo && (
+            <button
+              onClick={clearSearch}
+              className="text-xs text-zinc-500 hover:text-zinc-300 cursor-pointer"
+            >
+              Clear results
+            </button>
+          )}
         </div>
-      )}
 
-      {queriesUsed && (
-        <div className="flex items-center gap-2 flex-wrap text-xs text-zinc-500">
-          <span>AI searched for:</span>
-          {queriesUsed.map((q, i) => (
-            <span key={i} className="px-2 py-0.5 bg-zinc-800 rounded-full text-zinc-400">
-              {q}
-            </span>
-          ))}
-        </div>
-      )}
+        {showRecInput && (
+          <form onSubmit={handleRecommend} className="flex gap-2 mt-3">
+            <input
+              type="text"
+              value={recRequest}
+              onChange={(e) => setRecRequest(e.target.value)}
+              placeholder="What are you in the mood for?"
+              autoFocus
+              className="flex-1 bg-zinc-900 border border-indigo-700/50 rounded-lg px-4 py-2.5 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-indigo-500 transition-colors"
+            />
+            <button
+              type="submit"
+              disabled={loading}
+              className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-lg transition-colors cursor-pointer disabled:opacity-50"
+            >
+              Go
+            </button>
+          </form>
+        )}
 
-      {episodes.length === 0 && !loading && !error && (
-        <div className="text-center py-20 text-zinc-500">
-          <p className="text-lg">Search for episodes or hit "Recommend for Me" to get started</p>
-        </div>
-      )}
+        {error && (
+          <div className="mt-3 p-3 bg-red-900/30 border border-red-800 rounded-lg text-sm text-red-300">
+            {error}
+          </div>
+        )}
 
-      {loading && (
-        <div className="text-center py-12 text-zinc-500">
-          <p className="text-sm animate-pulse">
-            {searchMode === "recommend"
-              ? "AI is analyzing your taste profile and finding episodes..."
-              : "Loading..."}
-          </p>
-        </div>
-      )}
+        {queriesUsed && (
+          <div className="flex items-center gap-2 flex-wrap text-xs text-zinc-500 mt-3">
+            <span>AI searched for:</span>
+            {queriesUsed.map((q, i) => (
+              <span key={i} className="px-2 py-0.5 bg-zinc-800 rounded-full text-zinc-400">
+                {q}
+              </span>
+            ))}
+          </div>
+        )}
 
-      <div className="grid gap-4">
-        {episodes.map((ep) => (
-          <EpisodeCard
-            key={ep.id}
-            episode={ep}
-            onViewFeed={handleViewFeed}
-            favoriteFeeds={favoriteFeeds}
-          />
-        ))}
-      </div>
+        {loading && (
+          <div className="text-center py-8 text-zinc-500">
+            <p className="text-sm animate-pulse">
+              {searchMode === "recommend"
+                ? "AI is finding episodes for you..."
+                : "Loading..."}
+            </p>
+          </div>
+        )}
+
+        {episodes.length > 0 && (
+          <div className="grid gap-4 mt-4">
+            {episodes.map((ep) => (
+              <EpisodeCard
+                key={ep.id}
+                episode={ep}
+                onViewFeed={handleViewFeed}
+                favoriteFeeds={favoriteFeeds}
+              />
+            ))}
+          </div>
+        )}
+      </section>
     </div>
   );
 }
