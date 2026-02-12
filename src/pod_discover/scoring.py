@@ -125,8 +125,17 @@ def calculate_recency_score(episode: Episode) -> float:
 
     try:
         # Parse ISO format date
-        pub_date = datetime.fromisoformat(episode.date_published.replace('Z', '+00:00'))
-        now = datetime.utcnow()
+        from datetime import timezone
+
+        pub_date_str = episode.date_published.replace('Z', '+00:00')
+        pub_date = datetime.fromisoformat(pub_date_str)
+
+        # Ensure both datetimes are timezone-aware for comparison
+        if pub_date.tzinfo is None:
+            # If naive, assume UTC
+            pub_date = pub_date.replace(tzinfo=timezone.utc)
+
+        now = datetime.now(timezone.utc)
 
         # Calculate age in days
         age_seconds = (now - pub_date).total_seconds()
