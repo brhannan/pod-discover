@@ -25,7 +25,7 @@ async def refresh_trending_cache(db: Database, podcast_client: PodcastIndexClien
             trending_episodes = await podcast_client.get_trending_episodes(max=100)
             # Convert episodes list to dict with ranks
             episodes_dict = {
-                ep.id: idx + 1
+                ep.id: {"rank": idx}
                 for idx, ep in enumerate(trending_episodes)
             }
         except Exception as e:
@@ -44,7 +44,7 @@ async def refresh_trending_cache(db: Database, podcast_client: PodcastIndexClien
         )
 
     except Exception as e:
-        logger.error(f"Error refreshing trending cache: {e}", exc_info=True)
+        logger.error(f"Failed to refresh trending cache: {e}")
 
 
 async def refresh_reddit_cache(db: Database):
@@ -65,15 +65,15 @@ async def refresh_reddit_cache(db: Database):
         logger.info(f"Reddit cache refreshed: {len(mentions)} podcasts mentioned")
 
     except Exception as e:
-        logger.error(f"Error refreshing Reddit cache: {e}", exc_info=True)
+        logger.error(f"Error refreshing Reddit cache: {e}")
 
 
 async def background_cache_refresh_loop(db: Database, podcast_client: PodcastIndexClient):
     """Background loop that refreshes caches every 4 hours (2h trending + 2h Reddit)"""
     logger.info("Starting background cache refresh loop")
 
-    try:
-        while True:
+    while True:
+        try:
             # Refresh trending cache
             await refresh_trending_cache(db, podcast_client)
 
@@ -86,12 +86,10 @@ async def background_cache_refresh_loop(db: Database, podcast_client: PodcastInd
             # Wait 2 hours (total 4 hour cycle)
             await asyncio.sleep(2 * 60 * 60)
 
-    except asyncio.CancelledError:
-        logger.info("Background cache refresh loop cancelled")
-        raise
-    except Exception as e:
-        logger.error(f"Error in background cache refresh loop: {e}", exc_info=True)
-        # Retry with 60s delay
-        await asyncio.sleep(60)
-        # Re-raise to restart the loop
-        raise
+        except asyncio.CancelledError:
+            logger.info("Background cache refresh loop cancelled")
+            break
+        except Exception as e:
+            logger.error(f"Error in background refresh loop: {e}")
+            await asyncio.sleep(60)
+            # Loop continues (automatic retry)
