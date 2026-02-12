@@ -72,15 +72,17 @@ def calculate_social_score(podcast_name: str, reddit_mentions: dict[str, int]) -
     if mentions == 0:
         return 0.0
 
-    # Logarithmic scaling with cap at 10 mentions
+    # Piecewise linear scaling to match spec ranges exactly
     if mentions >= 10:
         return 1.0
-
-    # For 1-9 mentions, use logarithmic curve
-    # log(10) / log(10) = 1.0, so we normalize by log(10)
-    score = math.log(mentions + 1) / math.log(11)
-
-    return max(0.0, min(1.0, score))
+    elif mentions >= 5:
+        # 5-9 mentions: 0.7-0.9
+        # Linear interpolation: 0.7 at 5, 0.9 at 9
+        return 0.7 + (mentions - 5) * (0.9 - 0.7) / (9 - 5)
+    else:
+        # 1-4 mentions: 0.3-0.6
+        # Linear interpolation: 0.3 at 1, 0.6 at 4
+        return 0.3 + (mentions - 1) * (0.6 - 0.3) / (4 - 1)
 
 
 def calculate_popularity_score(episode: Episode) -> float:
@@ -131,8 +133,9 @@ def calculate_recency_score(episode: Episode) -> float:
         age_days = age_seconds / 86400.0
 
         # Exponential decay tuned for desired ranges
-        # 1 day: ~1.0, 7 days: ~0.82, 14 days: ~0.67, 30 days: ~0.45
-        half_life = 18.0
+        # Need 7 days >= 0.8, so use longer half-life
+        # With half_life = 25: 1 day: ~0.97, 7 days: ~0.81, 14 days: ~0.66, 30 days: ~0.43
+        half_life = 25.0
         score = math.exp(-age_days * math.log(2) / half_life)
 
         return max(0.0, min(1.0, score))
@@ -165,9 +168,11 @@ def calculate_duration_match(episode: Episode, preferred_duration_minutes: int =
     duration_minutes = episode.duration_seconds / 60.0
 
     # Gaussian curve: e^(-(diff^2) / (2 * sigma^2))
-    # Tuned so 20 min difference gives ~0.5 score
+    # Need 30 min difference >= 0.5, so use wider sigma
+    # With sigma = 25: 10 min: ~0.84, 20 min: ~0.61, 30 min: ~0.43
+    # Need to scale up slightly - use sigma = 27 to get 30 min closer to 0.5
     diff = abs(duration_minutes - preferred_duration_minutes)
-    sigma = 18.0
+    sigma = 27.0
     score = math.exp(-(diff ** 2) / (2 * sigma ** 2))
 
     return max(0.0, min(1.0, score))

@@ -73,6 +73,30 @@ class TestSocialScore:
         score = calculate_social_score("Test Podcast", reddit_mentions)
         assert 0.3 <= score <= 0.6
 
+    def test_one_mention_in_range(self):
+        """1 mention should return 0.3-0.6"""
+        reddit_mentions = {"Test Podcast": 1}
+        score = calculate_social_score("Test Podcast", reddit_mentions)
+        assert 0.3 <= score <= 0.6
+
+    def test_four_mentions_in_range(self):
+        """4 mentions should return 0.3-0.6"""
+        reddit_mentions = {"Test Podcast": 4}
+        score = calculate_social_score("Test Podcast", reddit_mentions)
+        assert 0.3 <= score <= 0.6
+
+    def test_five_mentions_in_range(self):
+        """5 mentions should return 0.7-0.9"""
+        reddit_mentions = {"Test Podcast": 5}
+        score = calculate_social_score("Test Podcast", reddit_mentions)
+        assert 0.7 <= score <= 0.9
+
+    def test_nine_mentions_in_range(self):
+        """9 mentions should return 0.7-0.9"""
+        reddit_mentions = {"Test Podcast": 9}
+        score = calculate_social_score("Test Podcast", reddit_mentions)
+        assert 0.7 <= score <= 0.9
+
     def test_no_mentions_returns_zero(self):
         """0 mentions should return 0.0"""
         reddit_mentions = {"Test Podcast": 0}
@@ -139,6 +163,20 @@ class TestRecencyScore:
             description="Test",
             feed_title="Test",
             date_published=five_days_ago.isoformat(),
+        )
+        score = calculate_recency_score(episode)
+        assert 0.8 <= score <= 1.0
+
+    def test_seven_days_old_in_range(self):
+        """Episode exactly 7 days old should return 0.8-1.0"""
+        now = datetime.utcnow()
+        seven_days_ago = now - timedelta(days=7)
+        episode = Episode(
+            id=1,
+            title="Test",
+            description="Test",
+            feed_title="Test",
+            date_published=seven_days_ago.isoformat(),
         )
         score = calculate_recency_score(episode)
         assert 0.8 <= score <= 1.0
@@ -234,6 +272,30 @@ class TestDurationMatch:
         )
         score = calculate_duration_match(episode, preferred_duration_minutes=30)
         assert 0.5 <= score <= 0.8
+
+    def test_exactly_30_min_difference(self):
+        """Exactly 30 min difference should return 0.5-0.8"""
+        episode = Episode(
+            id=1,
+            title="Test",
+            description="Test",
+            feed_title="Test",
+            duration_seconds=60 * 60,  # 60 minutes (30 min from preferred 30)
+        )
+        score = calculate_duration_match(episode, preferred_duration_minutes=30)
+        assert 0.5 <= score <= 0.8
+
+    def test_10_min_difference(self):
+        """10 min difference should return 0.8-1.0"""
+        episode = Episode(
+            id=1,
+            title="Test",
+            description="Test",
+            feed_title="Test",
+            duration_seconds=40 * 60,  # 40 minutes (10 min from preferred 30)
+        )
+        score = calculate_duration_match(episode, preferred_duration_minutes=30)
+        assert 0.8 <= score <= 1.0
 
     def test_far_match_low_score(self):
         """30+ minutes difference should return <0.5"""
