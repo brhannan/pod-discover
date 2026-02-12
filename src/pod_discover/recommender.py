@@ -182,7 +182,16 @@ class Recommender:
                         all_episodes.append(ep)
 
         if not all_episodes:
-            return {"episodes": [], "queries_used": queries, "usage": total_usage, "cached": False}
+            return {
+                "episodes": [],
+                "queries_used": queries,
+                "meta": {
+                    "total_candidates_considered": 0,
+                    "algorithm_version": "hybrid-v1",
+                },
+                "usage": total_usage,
+                "cached": False,
+            }
 
         # Get trending and Reddit data for scoring
         trending_data_raw = await self._get_trending_data()
@@ -264,6 +273,14 @@ class Recommender:
                 "match_score": ai_ranking["score"],
                 "match_reason": ai_ranking["reason"],
                 "composite_score": composite_score,
+                "signal_breakdown": {
+                    "ai_match": round(ai_score, 2),
+                    "trending": round(trending_score, 2),
+                    "social": round(social_score, 2),
+                    "popularity": round(popularity_score, 2),
+                    "recency": round(recency_score, 2),
+                    "duration": round(duration_score, 2),
+                },
             })
 
         # Sort by composite score descending
@@ -272,6 +289,10 @@ class Recommender:
         result = {
             "episodes": ranked_episodes,
             "queries_used": queries,
+            "meta": {
+                "total_candidates_considered": len(all_episodes),
+                "algorithm_version": "hybrid-v1",
+            },
             "usage": total_usage,
             "cached": False,
         }
