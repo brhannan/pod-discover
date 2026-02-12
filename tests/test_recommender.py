@@ -31,14 +31,14 @@ def mock_db():
     # Mock trending cache
     db.is_trending_cache_stale.return_value = False
     db.get_trending_cache.return_value = {
-        "feeds": [
-            {"id": 100, "title": "Trending Podcast 1"},
-            {"id": 200, "title": "Trending Podcast 2"},
-        ],
-        "episodes": [
-            {"id": 1001, "title": "Trending Episode 1", "feedId": 100},
-            {"id": 1002, "title": "Trending Episode 2", "feedId": 200},
-        ],
+        "podcasts": {
+            100: {"title": "Trending Podcast 1"},
+            200: {"title": "Trending Podcast 2"},
+        },
+        "episodes": {
+            1001: {"rank": 0},
+            1002: {"rank": 1},
+        },
     }
 
     # Mock Reddit mentions
@@ -168,4 +168,5 @@ async def test_recommend_uses_composite_scoring(mock_db, mock_podcast_client):
             if result["episodes"]:
                 # Check that composite_score is present in episode data
                 episode = result["episodes"][0]
-                assert "composite_score" in episode or "match_score" in episode
+                assert "match_score" in episode
+                assert 0 <= episode["match_score"] <= 10

@@ -162,7 +162,7 @@ class Recommender:
             # Source 1: AI-generated search queries
             self._search_by_queries(queries[:5]),
             # Source 2: Trending episodes
-            self.podcast_client.get_trending_episodes(max=20),
+            self.podcast_client.get_trending_episodes(max=10),
             # Source 3: Episodes from trending podcasts
             self._get_episodes_from_trending_feeds(),
             # Source 4: Episodes from Reddit-mentioned podcasts
@@ -186,7 +186,7 @@ class Recommender:
 
         # Get trending and Reddit data for scoring
         trending_data_raw = await self._get_trending_data()
-        trending_data = {feed["id"]: {"rank": i + 1} for i, feed in enumerate(trending_data_raw.get("feeds", []))}
+        trending_data = trending_data_raw.get("podcasts", {})
         reddit_mentions = self.db.get_reddit_mentions(max_age_hours=24)
 
         # Step 3: Rank and explain with AI
@@ -298,17 +298,15 @@ class Recommender:
     async def _get_episodes_from_trending_feeds(self) -> list[Episode]:
         """Get recent episodes from trending podcasts."""
         trending_data = await self._get_trending_data()
-        trending_feeds = trending_data.get("feeds", [])
+        trending_podcasts = trending_data.get("podcasts", {})
 
-        if not trending_feeds:
+        if not trending_podcasts:
             return []
 
-        # Get episodes from top 10 trending feeds
+        # Get episodes from top 5 trending feeds
         tasks = []
-        for feed in trending_feeds[:10]:
-            feed_id = feed.get("id")
-            if feed_id:
-                tasks.append(self.podcast_client.get_episodes_by_feed_id(feed_id, max_results=3))
+        for feed_id in list(trending_podcasts.keys())[:5]:
+            tasks.append(self.podcast_client.get_episodes_by_feed_id(feed_id, max_results=2))
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -335,8 +333,8 @@ class Recommender:
 
         # Search for top mentioned podcasts
         tasks = []
-        for podcast_name in list(reddit_mentions.keys())[:10]:
-            tasks.append(self.podcast_client.search_episodes_by_term(podcast_name, max_results=3))
+        for podcast_name in list(reddit_mentions.keys())[:3]:
+            tasks.append(self.podcast_client.search_episodes_by_term(podcast_name, max_results=2))
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -357,33 +355,28 @@ class Recommender:
     async def _get_trending_data(self) -> dict:
         """Get or refresh trending data cache."""
         # Check if cache is stale
-        if self.db.is_trending_cache_stale("trending_feeds", TRENDING_CACHE_TTL):
+        if self.db.is_trending_cache_stale("podcasts", TRENDING_CACHE_TTL):
             # Refresh cache
-            trending_feeds = await self.podcast_client.get_trending_podcasts(max=50)
-            trending_episodes = await self.podcast_client.get_trending_episodes(max=20)
+            podcasts = await self.podcast_client.get_trending_podcasts(max=100)
+            episodes_list = await self.podcast_client.get_trending_episodes(max=100)
+
+            # Convert episodes list to dict with ranks
+            episodes = {}
+            for rank, ep in enumerate(episodes_list):
+                episodes[ep.id] = {"rank": rank}
 
             cache_data = {
-                "feeds": [
-                    {"id": feed_id, "title": feed_data.get("title", "")}
-                    for feed_id, feed_data in trending_feeds.items()
-                ],
-                "episodes": [
-                    {
-                        "id": ep.id,
-                        "title": ep.title,
-                        "feedId": ep.feed_id,
-                    }
-                    for ep in trending_episodes
-                ],
+                "podcasts": podcasts,  # Keep as dict from API
+                "episodes": episodes,  # Dict mapping episode_id -> {rank}
             }
 
-            self.db.set_trending_cache("trending_feeds", cache_data)
+            self.db.set_trending_cache("podcasts", cache_data)
             return cache_data
 
         # Return cached data
-        cached = self.db.get_trending_cache("trending_feeds")
+        cached = self.db.get_trending_cache("podcasts")
         if cached:
             return cached
 
         # Fallback: return empty data
-        return {"feeds": [], "episodes": []}
+        return {"podcasts": {}, "episodes": {}}
