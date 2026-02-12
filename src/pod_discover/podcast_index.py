@@ -132,3 +132,29 @@ class PodcastIndexClient:
         data = await self._get("episodes/random", params)
         items = data.get("episodes", [])
         return [self._parse_episode(item) for item in items[:max_results]]
+
+    async def get_trending_podcasts(self, max: int = 50, lang: str = "en") -> dict[int, dict]:
+        """
+        Get trending podcast feeds.
+        Returns dict mapping feed_id to {title, rank, trend_score}
+        """
+        data = await self._get("podcasts/trending", {"max": max, "lang": lang})
+        feeds = data.get("feeds", [])
+
+        result = {}
+        for rank, feed in enumerate(feeds):
+            feed_id = feed.get("id")
+            if feed_id:
+                result[feed_id] = {
+                    "title": feed.get("title", ""),
+                    "rank": rank,
+                    "trend_score": feed.get("trendScore", 0),
+                }
+
+        return result
+
+    async def get_trending_episodes(self, max: int = 10, lang: str = "en") -> list[Episode]:
+        """Get trending episodes"""
+        data = await self._get("episodes/trending", {"max": max, "lang": lang})
+        items = data.get("items", [])
+        return [self._parse_episode(item) for item in items[:max]]
