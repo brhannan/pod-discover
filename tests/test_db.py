@@ -125,3 +125,50 @@ def test_database_persistence(temp_db):
     history = db2.get_consumption_history(limit=1)
     assert len(history) == 1
     assert history[0].item_id == "999"
+
+
+def test_trending_cache_operations(tmp_path):
+    """Test storing and retrieving trending cache"""
+    db_path = tmp_path / "test.db"
+    db = Database(str(db_path))
+
+    # Set trending cache
+    trending_data = {"feeds": [{"id": 123, "title": "Trending Show", "rank": 1}]}
+    db.set_trending_cache("podcasts", trending_data)
+
+    # Get trending cache
+    cached = db.get_trending_cache("podcasts")
+    assert cached is not None
+    assert cached["feeds"][0]["id"] == 123
+
+    # Check timestamp is recent
+    from datetime import datetime, timezone
+    assert (datetime.now(timezone.utc) - cached["cached_at"]).seconds < 5
+
+
+def test_trending_cache_expiry(tmp_path):
+    """Test that stale cache is identified"""
+    db_path = tmp_path / "test.db"
+    db = Database(str(db_path))
+
+    trending_data = {"feeds": []}
+    db.set_trending_cache("podcasts", trending_data)
+
+    # Check if cache is stale (should not be within 1 second)
+    assert not db.is_trending_cache_stale("podcasts", max_age_seconds=3600)
+
+
+def test_reddit_mentions_operations(tmp_path):
+    """Test storing and retrieving Reddit mentions"""
+    db_path = tmp_path / "test.db"
+    db = Database(str(db_path))
+
+    # Update Reddit mentions
+    db.update_reddit_mention("Serial", subreddits=["podcasts"], increment=5)
+    db.update_reddit_mention("Criminal", subreddits=["TrueCrimePodcasts"], increment=3)
+
+    # Get all mentions
+    mentions = db.get_reddit_mentions(max_age_hours=24)
+    assert "serial" in mentions  # Should be lowercase
+    assert mentions["serial"] == 5
+    assert mentions["criminal"] == 3

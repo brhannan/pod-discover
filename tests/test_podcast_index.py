@@ -15,7 +15,18 @@ def mock_client():
 @pytest.mark.asyncio
 async def test_search_episodes_by_term(mock_client):
     """Test searching episodes by term."""
-    mock_response = {
+    # Mock response for feed search
+    feed_response = {
+        "feeds": [
+            {
+                "id": 456,
+                "title": "Test Podcast",
+            }
+        ]
+    }
+
+    # Mock response for episodes from feed
+    episodes_response = {
         "items": [
             {
                 "id": 123,
@@ -32,7 +43,8 @@ async def test_search_episodes_by_term(mock_client):
     }
 
     with patch.object(mock_client, "_get", new_callable=AsyncMock) as mock_get:
-        mock_get.return_value = mock_response
+        # Return different responses for different calls
+        mock_get.side_effect = [feed_response, episodes_response]
         episodes = await mock_client.search_episodes_by_term("test query", max_results=10)
 
         assert len(episodes) == 1
@@ -40,7 +52,12 @@ async def test_search_episodes_by_term(mock_client):
         assert episodes[0].id == 123
         assert episodes[0].title == "Test Episode"
         assert episodes[0].feed_title == "Test Podcast"
-        mock_get.assert_called_once_with("search/byterm", {"q": "test query", "max": 10, "fulltext": "true"})
+
+        # Verify both calls were made
+        assert mock_get.call_count == 2
+        mock_get.assert_any_call("search/byterm", {"q": "test query", "max": 5})
+        # eps_per_feed = max(2, 10 // 1) = 10
+        mock_get.assert_any_call("episodes/byfeedid", {"id": 456, "max": 10})
 
 
 @pytest.mark.asyncio
@@ -120,3 +137,53 @@ def test_client_requires_credentials():
     with patch.dict("os.environ", {}, clear=True):
         with pytest.raises(ValueError, match="PODCAST_INDEX_KEY and PODCAST_INDEX_SECRET must be set"):
             PodcastIndexClient()
+
+
+@pytest.mark.asyncio
+async def test_get_trending_podcasts(mock_client):
+    """Test getting trending podcasts"""
+    mock_response = {
+        "feeds": [
+            {"id": 100, "title": "Trending Podcast 1", "trendScore": 95},
+            {"id": 101, "title": "Trending Podcast 2", "trendScore": 87},
+        ]
+    }
+
+    with patch.object(mock_client, "_get", new_callable=AsyncMock) as mock_get:
+        mock_get.return_value = mock_response
+        trending = await mock_client.get_trending_podcasts(max=50)
+
+        assert len(trending) == 2
+        assert trending[100]["title"] == "Trending Podcast 1"
+        assert trending[100]["rank"] == 0
+        assert trending[100]["trend_score"] == 95
+        mock_get.assert_called_once_with("podcasts/trending", {"max": 50, "lang": "en"})
+
+
+@pytest.mark.asyncio
+async def test_get_trending_episodes(mock_client):
+    """Test getting trending episodes"""
+    from pod_discover.models import Episode
+
+    mock_response = {
+        "items": [
+            {
+                "id": 500,
+                "title": "Trending Episode",
+                "description": "Hot content",
+                "feedTitle": "Popular Show",
+                "feedId": 100,
+                "trendScore": 92,
+            }
+        ]
+    }
+
+    with patch.object(mock_client, "_get", new_callable=AsyncMock) as mock_get:
+        mock_get.return_value = mock_response
+        episodes = await mock_client.get_trending_episodes(max=10)
+
+        assert len(episodes) == 1
+        assert isinstance(episodes[0], Episode)
+        assert episodes[0].id == 500
+        assert episodes[0].title == "Trending Episode"
+        mock_get.assert_called_once_with("episodes/trending", {"max": 10, "lang": "en"})

@@ -124,6 +124,51 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 - `log_feedback` - Rate an episode (1-5) with notes
 - `get_history` - View listening history
 
+## Recommendation Algorithm
+
+Pod Discover uses a **hybrid recommendation system** that combines:
+- **70% Personalization**: AI analysis of your taste profile, favorites, and listening history
+- **30% Discovery**: Trending content and social proof from the community
+
+### How It Works
+
+1. **Multi-Source Candidate Gathering**
+   - AI generates search queries based on your profile
+   - Fetches trending episodes from Podcast Index
+   - Pulls from Reddit-mentioned podcasts
+
+2. **Composite Scoring**
+   Each episode gets scored on 6 dimensions:
+   - 🎯 **AI Match** (50%): How well it fits your taste profile
+   - 📈 **Trending** (15%): Current popularity on Podcast Index
+   - 💬 **Social Buzz** (10%): Reddit community mentions
+   - ⭐ **Popularity** (10%): Established show quality
+   - 🕐 **Recency** (10%): Preference for fresh content
+   - ⏱️ **Duration** (5%): Fits your preferred episode length
+
+3. **Final Ranking**
+   Episodes are ranked by composite score, deduplicated by podcast feed, and top results returned.
+
+### Tuning Recommendations
+
+Want to adjust how recommendations work? Edit `src/pod_discover/config.py`:
+
+```python
+class RecommendationWeights:
+    AI_MATCH = 0.50      # Increase for more personalization
+    TRENDING = 0.15      # Increase for more discovery
+    SOCIAL_BUZZ = 0.10   # Increase for community favorites
+    # ...
+```
+
+Weights must sum to 1.0. Restart the server after changes.
+
+### Caching
+
+- **Recommendations**: Cached for 1 hour (invalidates when you update profile/favorites)
+- **Trending data**: Refreshed every 4 hours
+- **Reddit mentions**: Refreshed every 6 hours
+
 ## Testing
 
 ```bash

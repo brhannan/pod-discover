@@ -1,5 +1,7 @@
 """Pod-Discover REST API: FastAPI wrapper around existing logic."""
 
+import asyncio
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -11,10 +13,15 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from .background_tasks import background_cache_refresh_loop
 from .db import Database
 from .models import ConsumptionEntry, TasteProfile
 from .podcast_index import PodcastIndexClient
 from .recommender import Recommender
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 db: Database
 podcast_client: PodcastIndexClient
@@ -24,10 +31,29 @@ recommender: Recommender
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global db, podcast_client, recommender
+
+    # Initialize services
+    logger.info("Starting Pod Discover API...")
     db = Database()
     podcast_client = PodcastIndexClient()
     recommender = Recommender(db, podcast_client)
+
+    # Start background cache refresh task
+    background_task = asyncio.create_task(
+        background_cache_refresh_loop(db, podcast_client)
+    )
+    logger.info("Background cache refresh task started")
+
     yield
+
+    # Shutdown: cancel background task
+    logger.info("Shutting down Pod Discover API...")
+    background_task.cancel()
+    try:
+        await background_task
+    except asyncio.CancelledError:
+        logger.info("Background cache refresh task cancelled successfully")
+    logger.info("Shutdown complete")
 
 
 app = FastAPI(title="Pod Discover", version="0.1.0", lifespan=lifespan)

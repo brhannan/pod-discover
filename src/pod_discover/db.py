@@ -79,6 +79,29 @@ class Database:
                 )
             """
             )
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS trending_cache (
+                    cache_type TEXT PRIMARY KEY,
+                    data TEXT NOT NULL,
+                    cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS reddit_mentions (
+                    podcast_name TEXT PRIMARY KEY,
+                    mention_count INTEGER DEFAULT 1,
+                    subreddits TEXT,
+                    last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # Create index on updated_at for query performance
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_reddit_mentions_updated_at
+                ON reddit_mentions(updated_at)
+            """)
+
             conn.commit()
 
             # Ensure taste_profile has a default row
@@ -132,8 +155,8 @@ class Database:
     def get_consumption_history(self, limit: int = 20) -> list[ConsumptionEntry]:
         """Retrieve recent consumption history."""
         conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
         try:
+            conn.row_factory = sqlite3.Row
             cursor = conn.execute(
                 """
                 SELECT id, item_type, item_id, title, rating, notes, created_at as timestamp
@@ -172,8 +195,8 @@ class Database:
     def get_favorite_feeds(self) -> list[dict]:
         """Get all favorite podcasts."""
         conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
         try:
+            conn.row_factory = sqlite3.Row
             cursor = conn.execute(
                 "SELECT feed_id, feed_title, added_at FROM favorite_feeds ORDER BY added_at DESC"
             )
@@ -238,8 +261,8 @@ class Database:
     def get_my_list(self) -> list[QueueEntry]:
         """Return all queue entries ordered by added_at DESC."""
         conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
         try:
+            conn.row_factory = sqlite3.Row
             cursor = conn.execute(
                 "SELECT * FROM my_list ORDER BY added_at DESC"
             )
@@ -277,5 +300,107 @@ class Database:
         try:
             conn.execute("DELETE FROM my_list WHERE episode_id = ?", (episode_id,))
             conn.commit()
+        finally:
+            conn.close()
+
+    # --- Trending and Reddit Caches ---
+
+    def set_trending_cache(self, cache_type: str, data: dict) -> None:
+        """Store trending cache data"""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute(
+                """INSERT OR REPLACE INTO trending_cache (cache_type, data, cached_at)
+                   VALUES (?, ?, CURRENT_TIMESTAMP)""",
+                (cache_type, json.dumps(data)),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_trending_cache(self, cache_type: str) -> dict | None:
+        """Retrieve trending cache with timestamp"""
+        from datetime import timezone
+
+        conn = sqlite3.connect(self.db_path)
+        try:
+            row = conn.execute(
+                "SELECT data, cached_at FROM trending_cache WHERE cache_type = ?",
+                (cache_type,),
+            ).fetchone()
+
+            if not row:
+                return None
+
+            # Parse the timestamp and add UTC timezone info
+            cached_at = datetime.fromisoformat(row[1])
+            if cached_at.tzinfo is None:
+                cached_at = cached_at.replace(tzinfo=timezone.utc)
+
+            return {
+                **json.loads(row[0]),
+                "cached_at": cached_at,
+            }
+        finally:
+            conn.close()
+
+    def is_trending_cache_stale(self, cache_type: str, max_age_seconds: int) -> bool:
+        """Check if trending cache is stale"""
+        from datetime import timedelta, timezone
+
+        cached = self.get_trending_cache(cache_type)
+        if not cached:
+            return True
+
+        age = datetime.now(timezone.utc) - cached["cached_at"]
+        return age > timedelta(seconds=max_age_seconds)
+
+    def update_reddit_mention(
+        self, podcast_name: str, subreddits: list[str], increment: int = 1
+    ) -> None:
+        """Update or insert Reddit mention count"""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            podcast_name = podcast_name.lower()  # Normalize to lowercase
+            subreddits_json = json.dumps(subreddits)
+
+            # Try to update existing
+            cursor = conn.execute(
+                """UPDATE reddit_mentions
+                   SET mention_count = mention_count + ?,
+                       subreddits = ?,
+                       updated_at = CURRENT_TIMESTAMP
+                   WHERE podcast_name = ?""",
+                (increment, subreddits_json, podcast_name),
+            )
+
+            # If no rows updated, insert new
+            if cursor.rowcount == 0:
+                conn.execute(
+                    """INSERT INTO reddit_mentions (podcast_name, mention_count, subreddits)
+                       VALUES (?, ?, ?)""",
+                    (podcast_name, increment, subreddits_json),
+                )
+
+            conn.commit()
+        finally:
+            conn.close()
+
+    def get_reddit_mentions(self, max_age_hours: int = 24) -> dict[str, int]:
+        """Get Reddit mentions within max age"""
+        from datetime import timedelta, timezone
+
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
+
+            rows = conn.execute(
+                """SELECT podcast_name, mention_count
+                   FROM reddit_mentions
+                   WHERE updated_at > ?""",
+                (cutoff.isoformat(),),
+            ).fetchall()
+
+            return {row[0]: row[1] for row in rows}
         finally:
             conn.close()

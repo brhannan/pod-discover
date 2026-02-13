@@ -1,14 +1,17 @@
 """AI-powered recommendation engine using Claude."""
 
+import asyncio
 import hashlib
 import json
 import os
 
 import anthropic
 
+from .config import REDDIT_SUBREDDITS, TRENDING_CACHE_TTL
 from .db import Database
 from .models import Episode, TasteProfile
 from .podcast_index import PodcastIndexClient
+from .scoring import calculate_composite_score
 
 SEARCH_PROMPT = """\
 You are a podcast recommendation engine. Given a user's taste profile, favorite podcasts, and listening history, \
@@ -150,20 +153,52 @@ class Recommender:
             "output_tokens": search_usage["output_tokens"],
         }
 
-        # Step 2: Search for episodes using generated queries
+        # Step 2: Gather candidates from multiple sources in parallel
         all_episodes: list[Episode] = []
         seen_ids: set[int] = set()
-        for q in queries[:5]:
-            eps = await self.podcast_client.search_episodes_by_term(q, max_results=5)
-            for ep in eps:
-                if ep.id not in seen_ids:
-                    seen_ids.add(ep.id)
-                    all_episodes.append(ep)
+
+        # Gather from 4 sources in parallel
+        results = await asyncio.gather(
+            # Source 1: AI-generated search queries
+            self._search_by_queries(queries[:5]),
+            # Source 2: Trending episodes
+            self.podcast_client.get_trending_episodes(max=10),
+            # Source 3: Episodes from trending podcasts
+            self._get_episodes_from_trending_feeds(),
+            # Source 4: Episodes from Reddit-mentioned podcasts
+            self._get_episodes_from_reddit_mentions(),
+            return_exceptions=True,
+        )
+
+        # Combine all results, deduplicating by episode ID
+        for result_set in results:
+            if isinstance(result_set, Exception):
+                # Log error but continue with other sources
+                continue
+            if isinstance(result_set, list):
+                for ep in result_set:
+                    if ep.id not in seen_ids:
+                        seen_ids.add(ep.id)
+                        all_episodes.append(ep)
 
         if not all_episodes:
-            return {"episodes": [], "queries_used": queries, "usage": total_usage, "cached": False}
+            return {
+                "episodes": [],
+                "queries_used": queries,
+                "meta": {
+                    "total_candidates_considered": 0,
+                    "algorithm_version": "hybrid-v1",
+                },
+                "usage": total_usage,
+                "cached": False,
+            }
 
-        # Step 3: Rank and explain
+        # Get trending and Reddit data for scoring
+        trending_data_raw = await self._get_trending_data()
+        trending_data = trending_data_raw.get("podcasts", {})
+        reddit_mentions = self.db.get_reddit_mentions(max_age_hours=24)
+
+        # Step 3: Rank and explain with AI
         episodes_summary = json.dumps(
             [
                 {
@@ -185,25 +220,79 @@ class Recommender:
         total_usage["input_tokens"] += rank_usage["input_tokens"]
         total_usage["output_tokens"] += rank_usage["output_tokens"]
 
-        # Build ranked episode list with reasons (1 episode per feed)
+        # Convert rankings to a dict for easier lookup
+        ranking_dict = {r["id"]: r for r in rankings}
+
+        # Build ranked episode list with composite scores (1 episode per feed)
+        from .scoring import (
+            calculate_trending_score,
+            calculate_social_score,
+            calculate_popularity_score,
+            calculate_recency_score,
+            calculate_duration_match,
+        )
+
         ranked_episodes = []
         seen_feeds: set[int] = set()
-        for r in rankings:
-            ep = next((e for e in all_episodes if e.id == r["id"]), None)
-            if ep:
-                if ep.feed_id and ep.feed_id in seen_feeds:
-                    continue
-                if ep.feed_id:
-                    seen_feeds.add(ep.feed_id)
-                ranked_episodes.append({
-                    **ep.model_dump(),
-                    "match_score": r["score"],
-                    "match_reason": r["reason"],
-                })
+
+        for ep in all_episodes:
+            # Skip if we already have an episode from this feed
+            if ep.feed_id and ep.feed_id in seen_feeds:
+                continue
+
+            # Get AI ranking (or default to 0 if not ranked)
+            ai_ranking = ranking_dict.get(ep.id)
+            if not ai_ranking:
+                continue  # Skip episodes not ranked by AI
+
+            ai_score = ai_ranking["score"] / 10.0  # Normalize to 0-1
+
+            # Calculate all component scores
+            trending_score = calculate_trending_score(ep.feed_id or 0, trending_data)
+            social_score = calculate_social_score(ep.feed_title or "", reddit_mentions)
+            popularity_score = calculate_popularity_score(ep)
+            recency_score = calculate_recency_score(ep)
+            duration_score = calculate_duration_match(ep, preferred_duration_minutes=30)
+
+            # Calculate composite score
+            composite_score = calculate_composite_score(
+                episode=ep,
+                trending_score=trending_score,
+                social_score=social_score,
+                popularity_score=popularity_score,
+                recency_score=recency_score,
+                duration_score=duration_score,
+                ai_score=ai_score,
+            )
+
+            if ep.feed_id:
+                seen_feeds.add(ep.feed_id)
+
+            ranked_episodes.append({
+                **ep.model_dump(),
+                "match_score": ai_ranking["score"],
+                "match_reason": ai_ranking["reason"],
+                "composite_score": composite_score,
+                "signal_breakdown": {
+                    "ai_match": round(ai_score, 2),
+                    "trending": round(trending_score, 2),
+                    "social": round(social_score, 2),
+                    "popularity": round(popularity_score, 2),
+                    "recency": round(recency_score, 2),
+                    "duration": round(duration_score, 2),
+                },
+            })
+
+        # Sort by composite score descending
+        ranked_episodes.sort(key=lambda x: x["composite_score"], reverse=True)
 
         result = {
             "episodes": ranked_episodes,
             "queries_used": queries,
+            "meta": {
+                "total_candidates_considered": len(all_episodes),
+                "algorithm_version": "hybrid-v1",
+            },
             "usage": total_usage,
             "cached": False,
         }
@@ -212,3 +301,103 @@ class Recommender:
         self.db.set_cached_recommendations(profile_hash, user_request, json.dumps(result))
 
         return result
+
+    async def _search_by_queries(self, queries: list[str]) -> list[Episode]:
+        """Search for episodes using AI-generated queries."""
+        episodes: list[Episode] = []
+        seen_ids: set[int] = set()
+
+        for q in queries:
+            eps = await self.podcast_client.search_episodes_by_term(q, max_results=5)
+            for ep in eps:
+                if ep.id not in seen_ids:
+                    seen_ids.add(ep.id)
+                    episodes.append(ep)
+
+        return episodes
+
+    async def _get_episodes_from_trending_feeds(self) -> list[Episode]:
+        """Get recent episodes from trending podcasts."""
+        trending_data = await self._get_trending_data()
+        trending_podcasts = trending_data.get("podcasts", {})
+
+        if not trending_podcasts:
+            return []
+
+        # Get episodes from top 5 trending feeds
+        tasks = []
+        for feed_id in list(trending_podcasts.keys())[:5]:
+            tasks.append(self.podcast_client.get_episodes_by_feed_id(feed_id, max_results=2))
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        episodes: list[Episode] = []
+        seen_ids: set[int] = set()
+
+        for result in results:
+            if isinstance(result, Exception):
+                continue
+            if isinstance(result, list):
+                for ep in result:
+                    if ep.id not in seen_ids:
+                        seen_ids.add(ep.id)
+                        episodes.append(ep)
+
+        return episodes
+
+    async def _get_episodes_from_reddit_mentions(self) -> list[Episode]:
+        """Get episodes from Reddit-mentioned podcasts."""
+        reddit_mentions = self.db.get_reddit_mentions(max_age_hours=24)
+
+        if not reddit_mentions:
+            return []
+
+        # Search for top mentioned podcasts
+        tasks = []
+        for podcast_name in list(reddit_mentions.keys())[:3]:
+            tasks.append(self.podcast_client.search_episodes_by_term(podcast_name, max_results=2))
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        episodes: list[Episode] = []
+        seen_ids: set[int] = set()
+
+        for result in results:
+            if isinstance(result, Exception):
+                continue
+            if isinstance(result, list):
+                for ep in result:
+                    if ep.id not in seen_ids:
+                        seen_ids.add(ep.id)
+                        episodes.append(ep)
+
+        return episodes
+
+    async def _get_trending_data(self) -> dict:
+        """Get or refresh trending data cache."""
+        # Check if cache is stale
+        if self.db.is_trending_cache_stale("podcasts", TRENDING_CACHE_TTL):
+            # Refresh cache
+            podcasts = await self.podcast_client.get_trending_podcasts(max=100)
+            episodes_list = await self.podcast_client.get_trending_episodes(max=100)
+
+            # Convert episodes list to dict with ranks
+            episodes = {}
+            for rank, ep in enumerate(episodes_list):
+                episodes[ep.id] = {"rank": rank}
+
+            cache_data = {
+                "podcasts": podcasts,  # Keep as dict from API
+                "episodes": episodes,  # Dict mapping episode_id -> {rank}
+            }
+
+            self.db.set_trending_cache("podcasts", cache_data)
+            return cache_data
+
+        # Return cached data
+        cached = self.db.get_trending_cache("podcasts")
+        if cached:
+            return cached
+
+        # Fallback: return empty data
+        return {"podcasts": {}, "episodes": {}}
